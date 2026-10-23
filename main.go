@@ -1,27 +1,45 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
-// A small demo that exercises the store and prints the result.
 func main() {
-	s := NewStore()
-
-	notebook := s.Create(Item{Name: "Notebook", Price: 3.50})
-	s.Create(Item{Name: "Pen", Price: 1.25})
-	eraser := s.Create(Item{Name: "Eraser", Price: 0.75})
-
-	if _, err := s.Update(notebook.ID, Item{Name: "Notebook (large)", Price: 4.75}); err != nil {
-		log.Fatal(err)
-	}
-	if err := s.Delete(eraser.ID); err != nil {
-		log.Fatal(err)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
 
-	fmt.Println("Items in store:")
-	for _, it := range s.List() {
-		fmt.Printf("  #%d  %-18s $%.2f\n", it.ID, it.Name, it.Price)
+	srv := &http.Server{
+		Addr:              ":" + port, // listen on all interfaces (required inside a container)
+		Handler:           NewServer(NewStore()),
+		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	// Stop cleanly on Ctrl+C (SIGINT) or `docker stop` (SIGTERM).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Printf("API listening on :%s", port)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("server error: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("shutting down...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown error: %v", err)
+	}
+	log.Println("stopped")
 }
