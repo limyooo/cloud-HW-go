@@ -1,0 +1,6 @@
+# Binaries
+/go-devops-course
+*.exe
+*.test
+*.out
+coverage.*
