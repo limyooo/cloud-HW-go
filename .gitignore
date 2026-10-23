@@ -2,5 +2,6 @@
 /go-devops-course
 *.exe
 *.test
+!Dockerfile.test
 *.out
 coverage.*

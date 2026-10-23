@@ -1,0 +1,7 @@
+# Runs the full test suite and exits: 0 = all tests passed, non-zero = failure.
+FROM golang:1.27-alpine
+WORKDIR /src
+ENV CGO_ENABLED=0
+COPY go.mod ./
+COPY *.go ./
+CMD ["sh", "-c", "go vet ./... && go test -v -count=1 ./..."]
