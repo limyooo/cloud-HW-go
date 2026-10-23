@@ -7,21 +7,77 @@ on:
 
 jobs:
   test:
+    name: Run tests in Docker
     runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.summary.outputs.passed }}
+      failed: ${{ steps.summary.outputs.failed }}
     steps:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Set up Go (version read from go.mod)
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - name: Run tests (Dockerfile.test via run-tests.sh)
+        shell: bash   # bash here also enables pipefail, so tee keeps the script's exit code
+        run: bash ./run-tests.sh 2>&1 | tee test-output.txt
 
-      - name: Verify dependencies
-        run: go mod verify
+      - name: Write job summary
+        id: summary
+        if: always()
+        shell: bash
+        run: |
+          PASSED=$(grep -c -- '--- PASS' test-output.txt 2>/dev/null || true)
+          FAILED=$(grep -c -- '--- FAIL' test-output.txt 2>/dev/null || true)
+          echo "passed=${PASSED:-0}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED:-0}" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Test results"
+            echo ""
+            echo "Passed: ${PASSED:-0}  Failed: ${FAILED:-0}"
+            echo ""
+            echo '```'
+            tail -n 60 test-output.txt 2>/dev/null || echo "no test output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Vet
-        run: go vet ./...
+  notify-slack:
+    name: Post summary to Slack
+    needs: test
+    if: always()   # run whether the tests passed, failed, or were cancelled
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack message
+        shell: bash
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RESULT: ${{ needs.test.result }}
+          PASSED: ${{ needs.test.outputs.passed }}
+          FAILED: ${{ needs.test.outputs.failed }}
+          COMMIT_MSG: ${{ github.event.head_commit.message || github.event.pull_request.title || 'manual run' }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "::warning::SLACK_WEBHOOK_URL secret is not set; skipping Slack notification."
+            exit 0
+          fi
 
-      - name: Test (with race detector)
-        run: go test -v -race -count=1 ./...
+          case "$RESULT" in
+            success)   ICON=":white_check_mark:"; STATUS="passed" ;;
+            failure)   ICON=":x:";                STATUS="failed" ;;
+            cancelled) ICON=":warning:";          STATUS="was cancelled" ;;
+            *)         ICON=":grey_question:";    STATUS="$RESULT" ;;
+          esac
+
+          RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          FIRST_LINE="$(printf '%s' "$COMMIT_MSG" | head -n 1)"
+
+          TEXT="$ICON *${GITHUB_WORKFLOW}* $STATUS on \`$GITHUB_REPOSITORY\`
+          • Branch: \`$GITHUB_REF_NAME\`
+          • Commit: \`${GITHUB_SHA:0:7}\` – $FIRST_LINE
+          • Trigger: $GITHUB_EVENT_NAME by $GITHUB_ACTOR
+          • Tests: ${PASSED:-0} passed, ${FAILED:-0} failed
+          • <$RUN_URL|View run details>"
+
+          # Strip the YAML indentation from the continuation lines.
+          TEXT="$(printf '%s\n' "$TEXT" | sed 's/^[[:space:]]*//')"
+
+          jq -n --arg text "$TEXT" '{text: $text}' \
+            | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL"
