@@ -1,3 +1,4 @@
+---- .gitignore ----
 # Binaries
 /go-devops-course
 *.exe
@@ -5,3 +6,8 @@
 !Dockerfile.test
 *.out
 coverage.*
+---- .dockerignore ----
+.git
+.github
+*.md
+*.sh
