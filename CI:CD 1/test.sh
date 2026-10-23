@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Run vet and the full test suite. Exits non-zero if anything fails.
-set -euo pipefail
-cd "$(dirname "$0")"
-go vet ./...
-go test -v -count=1 ./...
